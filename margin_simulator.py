@@ -215,10 +215,6 @@ def df_to_text_prompt(df):
     return prompt
 
 
-# The remaining functions (get_ai_explanation_api, get_basic_explanation, run_simulation_and_analysis)
-# remain the same, but run_simulation_and_analysis needs to pass max_loan_to_value to plot_margin_loan.
-
-
 def get_ai_explanation_api(prompt_text, hf_token):
     """Generate AI explanation using Hugging Face API with reliable models."""
     if not hf_token or hf_token.strip() == "":
