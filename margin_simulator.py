@@ -19,74 +19,100 @@ def simulate_margin_loan(
     max_loan_to_value=0.5,
     random_seed=None,
 ):
-    """Simulates a margin loan scenario over time with realistic features."""
-    if random_seed is not None:
-        np.random.seed(random_seed)
+    """
+    Simulates a margin loan scenario over time with a robust financial model.
+
+    Args:
+        initial_portfolio (float): The starting value of the portfolio.
+        initial_loan (float): The initial amount of the margin loan.
+        annual_market_return (float): The expected annual price return (ex-dividends).
+        annual_volatility (float): The annual volatility of portfolio returns.
+        annual_dividend_yield (float): The annual dividend yield.
+        annual_interest_rate (float): The annual interest rate on the margin loan.
+        years (int): The number of years to simulate.
+        yearly_contribution (float): Annual contribution to the portfolio.
+        yearly_withdrawal (float): Annual withdrawal from the portfolio.
+        capitalize_interest (bool): If True, interest is added to the loan balance.
+                                    If False, assumes interest is paid from an external
+                                    cash source and does not affect the portfolio value.
+        max_loan_to_value (float): The maximum allowed loan-to-value ratio.
+        random_seed (int, optional): Seed for the random number generator.
+
+    Returns:
+        pd.DataFrame: A DataFrame with the yearly simulation results.
+    """
+    rng = np.random.default_rng(random_seed)
     months = years * 12
     portfolio_value = np.zeros(months + 1)
     loan_balance = np.zeros(months + 1)
     equity = np.zeros(months + 1)
     cumulative_interest = np.zeros(months + 1)
     margin_call = np.zeros(months + 1, dtype=bool)
+    insolvent = np.zeros(months + 1, dtype=bool)
+
     portfolio_value[0] = initial_portfolio
     loan_balance[0] = initial_loan
     equity[0] = portfolio_value[0] - loan_balance[0]
-    monthly_interest_rate = annual_interest_rate / 12
+
+    monthly_interest_rate = (1 + annual_interest_rate) ** (1 / 12) - 1
     monthly_dividend_yield = annual_dividend_yield / 12
-    monthly_volatility = annual_volatility / np.sqrt(12)
-    monthly_expected_return = (1 + annual_market_return) ** (1 / 12) - 1
+    monthly_sigma = annual_volatility / np.sqrt(12)
+    monthly_drift = np.log(1 + annual_market_return) / 12 - 0.5 * monthly_sigma**2
+
     for month in range(1, months + 1):
-        market_return = np.random.normal(
-            loc=monthly_expected_return, scale=monthly_volatility
-        )
-        portfolio_value[month] = portfolio_value[month - 1] * (
-            1 + market_return + monthly_dividend_yield
-        )
+        z = rng.normal()
+        monthly_price_return = np.exp(monthly_drift + monthly_sigma * z) - 1
+        total_multiplier = (1 + monthly_price_return) * (1 + monthly_dividend_yield) - 1
+        portfolio_value[month] = portfolio_value[month - 1] * (1 + total_multiplier)
+
         interest = loan_balance[month - 1] * monthly_interest_rate
         cumulative_interest[month] = cumulative_interest[month - 1] + interest
-        if capitalize_interest:
-            loan_balance[month] = loan_balance[month - 1] + interest
-        else:
-            loan_balance[month] = loan_balance[month - 1]
+        loan_balance[month] = loan_balance[month - 1] + (
+            interest if capitalize_interest else 0
+        )
+
         if month % 12 == 0:
             portfolio_value[month] += yearly_contribution
             portfolio_value[month] = max(0, portfolio_value[month] - yearly_withdrawal)
-            max_loan = portfolio_value[month] * max_loan_to_value
-            if loan_balance[month] > max_loan:
-                sell_amount = loan_balance[month] - max_loan
-                portfolio_value[month] -= sell_amount
-                loan_balance[month] = max_loan
-        equity[month] = portfolio_value[month] - loan_balance[month]
-        if equity[month] < 0:
+
+        max_loan = portfolio_value[month] * max_loan_to_value
+        if loan_balance[month] > max_loan:
             margin_call[month] = True
-            # In a real scenario, this would lead to a forced liquidation of assets
-            # Here, we simulate a complete wipeout of equity if it goes negative.
-            portfolio_value[month] += equity[
-                month
-            ]  # Reduce portfolio by negative equity amount
-            equity[month] = 0  # Equity becomes zero
-            loan_balance[month] = portfolio_value[
-                month
-            ]  # Loan balance matches reduced portfolio value (minimum margin)
+            s_required = (loan_balance[month] - max_loan) / (1 - max_loan_to_value)
+            s_required = max(0.0, s_required)
+
+            if s_required >= portfolio_value[month]:
+                proceeds = portfolio_value[month]
+                portfolio_value[month] = 0.0
+                loan_balance[month] = max(0.0, loan_balance[month] - proceeds)
+                if loan_balance[month] > 0:
+                    insolvent[month] = True
+            else:
+                portfolio_value[month] -= s_required
+                loan_balance[month] -= s_required
+
+        equity[month] = portfolio_value[month] - loan_balance[month]
+
     df = pd.DataFrame(
         {
             "Month": range(months + 1),
-            "Year": [(m + 11) // 12 for m in range(months + 1)],
+            "Year": [m // 12 for m in range(months + 1)],
             "PortfolioValue": portfolio_value,
             "LoanBalance": loan_balance,
             "Equity": equity,
             "CumulativeInterest": cumulative_interest,
             "MarginCall": margin_call,
+            "Insolvent": insolvent,
         }
     )
     return df[df["Month"] % 12 == 0].reset_index(drop=True)
 
 
-def plot_margin_loan(df):
-    """Plots portfolio, loan, equity, cumulative interest, and margin calls."""
+def plot_margin_loan(df, max_loan_to_value):
+    """Plots portfolio, loan, equity, and margin calls, including the LTV threshold."""
     fig, ax1 = plt.subplots(figsize=(12, 7))
+    df["MaintenanceMargin"] = df.PortfolioValue * max_loan_to_value
 
-    # Plot on primary Y-axis (ax1)
     ax1.plot(
         df.Year,
         df.PortfolioValue,
@@ -97,19 +123,13 @@ def plot_margin_loan(df):
     ax1.plot(df.Year, df.Equity, label="Equity", color="tab:green", linewidth=2)
     ax1.fill_between(df.Year, df.Equity, 0, color="tab:green", alpha=0.1)
     ax1.set_xlabel("Years", fontsize=12)
-    ax1.set_ylabel("Portfolio / Equity", fontsize=12)  # Adjusted label
+    ax1.set_ylabel("Portfolio / Equity", fontsize=12)
     ax1.yaxis.set_major_formatter(mticker.StrMethodFormatter("{x:,.0f}"))
+    ax1.axhline(0, color="grey", linewidth=0.5, linestyle="--")
 
-    # Create a second Y-axis (ax2)
     ax2 = ax1.twinx()
-
-    # Plot on secondary Y-axis (ax2)
     ax2.plot(
-        df.Year,
-        df.LoanBalance,
-        label="Loan Balance",
-        color="tab:red",
-        linewidth=2,  # Moved LoanBalance here
+        df.Year, df.LoanBalance, label="Loan Balance", color="tab:red", linewidth=2
     )
     ax2.plot(
         df.Year,
@@ -119,34 +139,40 @@ def plot_margin_loan(df):
         linestyle="--",
         linewidth=2,
     )
-    ax2.set_ylabel("Loan / Cumulative Interest", fontsize=12)  # Adjusted label
+
+    ax2.set_ylabel("Loan / Interest", fontsize=12)
     ax2.yaxis.set_major_formatter(mticker.StrMethodFormatter("{x:,.0f}"))
 
-    # Handle Margin Call markers
     if df["MarginCall"].any():
         mc_years = df.loc[df["MarginCall"], "Year"]
-        mc_values_portfolio = df.loc[
-            df["MarginCall"], "PortfolioValue"
-        ]  # Plot on ax1 for Portfolio
+        mc_values = df.loc[df["MarginCall"], "PortfolioValue"]
         ax1.scatter(
             mc_years,
-            mc_values_portfolio,
-            color="red",
-            marker="x",
+            mc_values,
+            color="orange",
+            marker="X",
             s=100,
             label="Margin Call",
+            zorder=5,
         )
-        # If you wanted to show margin call effect on loan, you'd plot mc_values_loan on ax2
-        # mc_values_loan = df.loc[df["MarginCall"], "LoanBalance"]
-        # ax2.scatter(mc_years, mc_values_loan, color="red", marker="x", s=100)
 
-    # Combine legends from both axes
+    if df["Insolvent"].any():
+        insolvent_years = df.loc[df["Insolvent"], "Year"]
+        ax1.scatter(
+            insolvent_years,
+            [0] * len(insolvent_years),
+            color="red",
+            marker="o",
+            s=100,
+            label="Insolvency",
+            zorder=5,
+        )
+
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(
         lines1 + lines2, labels1 + labels2, frameon=False, fontsize=10, loc="upper left"
     )
-
     ax1.set_title("Margin Loan Simulation", fontsize=14, weight="bold")
     plt.tight_layout()
     plt.show()
@@ -156,26 +182,41 @@ def df_to_text_prompt(df):
     total_years = df["Year"].max()
     start_portfolio = df["PortfolioValue"].iloc[0]
     end_portfolio = df["PortfolioValue"].iloc[-1]
-    start_loan = df["LoanBalance"].iloc[0]
-    end_loan = df["LoanBalance"].iloc[-1]
-    portfolio_growth = ((end_portfolio / start_portfolio) - 1) * 100
+    start_equity = df["Equity"].iloc[0]
+    end_equity = df["Equity"].iloc[-1]
+
+    portfolio_cagr_str = "N/A"
+    if start_portfolio > 0 and total_years > 0:
+        portfolio_cagr = (end_portfolio / start_portfolio) ** (1.0 / total_years) - 1
+        portfolio_cagr_str = f"{portfolio_cagr:.2%}"
+
+    equity_cagr_str = "N/A"
+    if start_equity > 0 and total_years > 0:
+        equity_cagr = (end_equity / start_equity) ** (1.0 / total_years) - 1
+        equity_cagr_str = f"{equity_cagr:.2%}"
+
     total_interest = df["CumulativeInterest"].iloc[-1]
-    margin_calls = df[df["MarginCall"]]
-    margin_call_years = margin_calls["Year"].tolist()
+    margin_call_years = df[df["MarginCall"]]["Year"].unique().tolist()
+    insolvency_years = df[df["Insolvent"]]["Year"].unique().tolist()
 
     prompt = (
-        f"A margin loan simulation over {total_years} years shows: "
-        f"portfolio grew from ${start_portfolio:,.0f} to ${end_portfolio:,.0f} "
-        f"({portfolio_growth:.1f}% growth), loan increased from ${start_loan:,.0f} "
-        f"to ${end_loan:,.0f}, total interest was ${total_interest:,.0f}. "
+        f"Over {total_years} years, the portfolio grew from ${start_portfolio:,.0f} to ${end_portfolio:,.0f} "
+        f"(Portfolio CAGR: {portfolio_cagr_str}). The investor's equity grew from ${start_equity:,.0f} to ${end_equity:,.0f} "
+        f"(Equity CAGR: {equity_cagr_str}). Total interest was ${total_interest:,.0f}. "
     )
 
     if margin_call_years:
-        prompt += f"Margin calls occurred in years {margin_call_years}. "
-    else:
-        prompt += "No margin calls occurred. "
+        prompt += f"Margin calls occurred in years: {margin_call_years}. "
+    if insolvency_years:
+        prompt += f"Insolvency (portfolio wiped out with debt remaining) occurred in years: {insolvency_years}. "
+    if not margin_call_years and not insolvency_years:
+        prompt += "No margin calls or insolvency events occurred."
 
     return prompt
+
+
+# The remaining functions (get_ai_explanation_api, get_basic_explanation, run_simulation_and_analysis)
+# remain the same, but run_simulation_and_analysis needs to pass max_loan_to_value to plot_margin_loan.
 
 
 def get_ai_explanation_api(prompt_text, hf_token):
@@ -252,24 +293,31 @@ def get_ai_explanation_api(prompt_text, hf_token):
 def get_basic_explanation(df):
     """Fallback explanation when AI is unavailable."""
     total_years = df["Year"].max()
-    start_portfolio = df["PortfolioValue"].iloc[0]
-    end_portfolio = df["PortfolioValue"].iloc[-1]
-    portfolio_growth = ((end_portfolio / start_portfolio) - 1) * 100
-    margin_calls = df[df["MarginCall"]]
+    start_equity = df["Equity"].iloc[0]
+    end_equity = df["Equity"].iloc[-1]
 
-    if portfolio_growth > 200:
+    equity_growth = 0
+    if start_equity > 0:
+        equity_growth = ((end_equity / start_equity) - 1) * 100
+
+    if df["Insolvent"].any():
+        performance = "a catastrophic failure, ending in insolvency"
+    elif equity_growth > 200:
         performance = "excellent"
-    elif portfolio_growth > 100:
+    elif equity_growth > 100:
         performance = "strong"
     else:
         performance = "moderate"
 
-    risk_level = "low risk" if margin_calls.empty else "higher risk due to margin calls"
+    risk_level = "low risk"
+    if df["Insolvent"].any():
+        risk_level = "extreme risk, leading to a total loss"
+    elif df["MarginCall"].any():
+        risk_level = "higher risk due to margin calls"
 
     return (
-        f"they achieved {performance} portfolio growth over {total_years} years with {risk_level}. "
-        f"This demonstrates {'successful' if portfolio_growth > 100 else 'cautious'} use of leverage "
-        f"for amplifying market returns."
+        f"they achieved {performance} equity growth over {total_years} years with {risk_level}. "
+        f"This demonstrates {'the successful' if equity_growth > 100 else 'the cautious'} use of leverage. "
     )
 
 
@@ -303,7 +351,7 @@ def run_simulation_and_analysis(
         random_seed=42,
     )
 
-    plot_margin_loan(df)
+    plot_margin_loan(df, max_loan_to_value)
 
     prompt = df_to_text_prompt(df)
     print("\n" + "=" * 60)
