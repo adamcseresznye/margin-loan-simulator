@@ -16,7 +16,7 @@ An interactive tool to simulate margin loan scenarios and understand the risks a
 4. Adjust the sliders to explore different scenarios
 5. Add your Hugging Face token for AI explanations
 
-[![Binder](https://mybinder.org/badge_logo.svg)]()
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/adamcseresznye/margin-loan-simulator/HEAD?urlpath=%2Fdoc%2Ftree%2Fmargin_loan_simulator.ipynb)
 
 ## Getting Started
 - No installation required - everything runs in your browser
