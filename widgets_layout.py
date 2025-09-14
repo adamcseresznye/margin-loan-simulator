@@ -100,6 +100,15 @@ capitalize_checkbox = widgets.Checkbox(
     tooltip="If checked, unpaid interest is added to your loan balance (compound interest). If unchecked, you pay interest annually in cash.",
 )
 
+capitalize_explanation = widgets.HTML(
+    """
+    <div style="font-size:11px; color:#4b5563; margin-top:-10px; margin-bottom:10px; margin-left:110px; line-height: 1.4;">
+        <b>If checked:</b> The loan balance grows as interest is added to it.<br>
+        <b>If unchecked:</b> Assumes you pay the monthly interest with cash.
+    </div>
+    """
+)
+
 max_ltv_slider = widgets.FloatSlider(
     value=0.5,
     min=0.0,
@@ -127,6 +136,7 @@ col2 = VBox(
         contribution_slider,
         withdrawal_slider,
         capitalize_checkbox,
+        capitalize_explanation,
         max_ltv_slider,
     ]
 )

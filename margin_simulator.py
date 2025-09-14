@@ -59,9 +59,15 @@ def simulate_margin_loan(
         equity[month] = portfolio_value[month] - loan_balance[month]
         if equity[month] < 0:
             margin_call[month] = True
-            portfolio_value[month] += equity[month]
-            equity[month] = 0
-            loan_balance[month] = portfolio_value[month]
+            # In a real scenario, this would lead to a forced liquidation of assets
+            # Here, we simulate a complete wipeout of equity if it goes negative.
+            portfolio_value[month] += equity[
+                month
+            ]  # Reduce portfolio by negative equity amount
+            equity[month] = 0  # Equity becomes zero
+            loan_balance[month] = portfolio_value[
+                month
+            ]  # Loan balance matches reduced portfolio value (minimum margin)
     df = pd.DataFrame(
         {
             "Month": range(months + 1),
@@ -79,6 +85,8 @@ def simulate_margin_loan(
 def plot_margin_loan(df):
     """Plots portfolio, loan, equity, cumulative interest, and margin calls."""
     fig, ax1 = plt.subplots(figsize=(12, 7))
+
+    # Plot on primary Y-axis (ax1)
     ax1.plot(
         df.Year,
         df.PortfolioValue,
@@ -86,15 +94,23 @@ def plot_margin_loan(df):
         color="tab:blue",
         linewidth=2,
     )
-    ax1.plot(
-        df.Year, df.LoanBalance, label="Loan Balance", color="tab:red", linewidth=2
-    )
     ax1.plot(df.Year, df.Equity, label="Equity", color="tab:green", linewidth=2)
     ax1.fill_between(df.Year, df.Equity, 0, color="tab:green", alpha=0.1)
     ax1.set_xlabel("Years", fontsize=12)
-    ax1.set_ylabel("Portfolio / Loan / Equity", fontsize=12)
+    ax1.set_ylabel("Portfolio / Equity", fontsize=12)  # Adjusted label
     ax1.yaxis.set_major_formatter(mticker.StrMethodFormatter("{x:,.0f}"))
+
+    # Create a second Y-axis (ax2)
     ax2 = ax1.twinx()
+
+    # Plot on secondary Y-axis (ax2)
+    ax2.plot(
+        df.Year,
+        df.LoanBalance,
+        label="Loan Balance",
+        color="tab:red",
+        linewidth=2,  # Moved LoanBalance here
+    )
     ax2.plot(
         df.Year,
         df.CumulativeInterest,
@@ -103,19 +119,34 @@ def plot_margin_loan(df):
         linestyle="--",
         linewidth=2,
     )
-    ax2.set_ylabel("Cumulative Interest", fontsize=12)
+    ax2.set_ylabel("Loan / Cumulative Interest", fontsize=12)  # Adjusted label
     ax2.yaxis.set_major_formatter(mticker.StrMethodFormatter("{x:,.0f}"))
+
+    # Handle Margin Call markers
     if df["MarginCall"].any():
         mc_years = df.loc[df["MarginCall"], "Year"]
-        mc_values = df.loc[df["MarginCall"], "PortfolioValue"]
+        mc_values_portfolio = df.loc[
+            df["MarginCall"], "PortfolioValue"
+        ]  # Plot on ax1 for Portfolio
         ax1.scatter(
-            mc_years, mc_values, color="red", marker="x", s=100, label="Margin Call"
+            mc_years,
+            mc_values_portfolio,
+            color="red",
+            marker="x",
+            s=100,
+            label="Margin Call",
         )
+        # If you wanted to show margin call effect on loan, you'd plot mc_values_loan on ax2
+        # mc_values_loan = df.loc[df["MarginCall"], "LoanBalance"]
+        # ax2.scatter(mc_years, mc_values_loan, color="red", marker="x", s=100)
+
+    # Combine legends from both axes
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(
         lines1 + lines2, labels1 + labels2, frameon=False, fontsize=10, loc="upper left"
     )
+
     ax1.set_title("Margin Loan Simulation", fontsize=14, weight="bold")
     plt.tight_layout()
     plt.show()
